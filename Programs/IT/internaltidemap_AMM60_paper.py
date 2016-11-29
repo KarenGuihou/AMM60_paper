@@ -9,7 +9,7 @@
 
 from netCDF4 import Dataset
 import numpy as np
-import numpy.ma as ma
+import numpy.ma as ma # masks
 import datetime
 
 import os # Note sure I use this
@@ -75,9 +75,33 @@ def plotit_sub(x,y,var,label,clim,s_subplot):
     plt.ylim([+45,+63])
     plt.xlim([-14,+14])
     plt.title(label)
+    
+    
+# Plot map of thermocline variance and depth. (As above but on log colour scale)
+############################################
+def plotit_sub_log(x,y,var,label,clim,s_subplot):
+    plt.subplot(int(s_subplot[0]), int(s_subplot[1]), int(s_subplot[2]) )
+
+#    cs = plt.pcolormesh(x,y,var, cmap=plt.cm.gnuplot)
+    cs = plt.pcolormesh(x,y,var, cmap=plt.cm.gnuplot,
+                        norm=colors.LogNorm(vmin=clim[0], vmax=clim[1]))
+    cs.cmap.set_under('grey')
+    cb = plt.colorbar(cs, extend="max") # Extend the upper end of the colorbar    
+    #cb.set_ticks(range(clim[0],clim[1]+1))
+    #cb.set_ticklabels(range(clim[0],clim[1]+1))
+    cb.set_ticks(range(1,11))
+    cb.set_ticklabels(range(1,11))
+    
+    plt.ylabel('lat')
+    plt.xlabel('lon')
+    plt.ylim([+45,+63])
+    plt.xlim([-14,+14])
+    plt.title(label)
 
 
 
+    
+        
 
 
 ##############################################################################
@@ -246,8 +270,10 @@ profile = np.append(profile, rho_bot[:,np.newaxis,:,:], axis=1)
 
 ## Compute delta and variance properties
 #################################
+print 'compute pycnocline fields - This is super slow. Make some tea.'
 max_depth = 0 # not used for 3D profiles
-[delta, delta_nt, internal_tide_map, time_datetime,  pycn_depth_map_3day, internal_tide_map_3day, time_datetime_3day, time_counter_3day] = delta_diagnose( profile, time_counter, H, max_depth )
+[delta, delta_nt, internal_tide_map, time_datetime,  pycn_depth_map_3day, internal_tide_map_3day,
+             time_datetime_3day, time_counter_3day] = delta_diagnose( profile, time_counter, H, max_depth )
 
 # Process the SSH time data
 ################################
@@ -262,8 +288,6 @@ strat = (rho_top - rho_bot) / H;
 
 # Define masks
 ###############################
-import numpy.ma as ma
-
 [nt,ny,nx] = np.shape(strat)
 mask_shelf = np.reshape( ma.masked_where(nlev[0,:,:] < 41, nlev[0,:,:]) ,(ny,nx) )
 
@@ -282,9 +306,38 @@ mask_corners = np.reshape( ma.masked_where( t1+t2 , np.ones((ny,nx))) ,(ny,nx) )
 mask = mask_land*mask_200m*mask_corners # Ones and zeros, wet domain mask
 
 
+print 'compute stratification masks - sloooooow'
 mean_strat = np.mean( strat ,axis=0)
-mask_strat = ( mean_strat >= -2E-3 ).astype(int)*(-999)   # Good vals: 0 / bad vals: -999. Plus mask_strat to variable when plotting.
-#mask_strat = ma.masked_where(np.mean( strat ,axis=0) >= -2E-3, np.ones((ny,nx)))
+mean_mask_strat = ( mean_strat >= -2E-3 ).astype(int)*(-9999)   # Good vals: 0 / bad vals: -9999. 
+#Plus mean_mask_strat to variable when plotting.
+
+"""
+Compute 3 day  moving window average of stratification. CODE COPIED FROM amm60_data_tools.py
+Should be moved into delta_diagnose?
+Here compute strat mask using MEAN over 3 days. Could use a MAX(ABS(strat)) threshold.
+"""
+[runwin_nt,ny,nx] = np.shape(delta) # ny=nx=1 for 1d profiles
+
+## Define the internal tide variance in 3 day chunks
+####################################################
+i = 0 # initialise counter
+if(1):  # New chunking. Running mean 3 day window
+    """
+    Process over window  i-int(np.floor(winsiz/2)):i+int(np.ceil(winsiz/2))  
+    """
+    winsiz = 3*24 # Window Size (in pts) for chuncking operation. (Data is prob every hour)
+    chunkedsize = runwin_nt - winsiz  # 3 day chunking. Number of time stamps in chunked data
+#    strat_3day = np.zeros((chunkedsize, ny,nx))
+    mask_strat = np.zeros((chunkedsize, ny,nx))
+    i = int(np.floor(winsiz/2)) # initialise counter. Reference to time axis as originally loaded
+    while (i - int(np.floor(winsiz/2)) < chunkedsize): 
+        mask_strat[i-int(np.floor(winsiz/2)),:,:] = (
+            np.nanmean( strat[i-int(np.floor(winsiz/2)): i+int(np.ceil(winsiz/2)),:,:], axis = 0)
+            )
+        i += 1
+
+
+mask_strat = ( mask_strat >= -2E-3 ).astype(int)*(-9999)   # Good vals: 0 / bad vals: -9999. 
 
 
 
@@ -298,7 +351,7 @@ sortvar = np.zeros((runwin_nt,100)) # array [nt,% of finite area] of domain with
 for i in range(runwin_nt):
     # Sort snapshot of data 
     var = mask*copy.deepcopy(internal_tide_map_3day[i,:,:]) # function of [t=0,y,x] * (spatial mask)
-    var[mask*mask_strat==-999] = np.nan # nan for unstratified locations
+    var[mask*mask_strat[i,:,:]==-9999] = np.nan # nan for unstratified locations
     tt = np.sort(np.log10(var), axis=None)
     
     # Interpolate onto 100 points, excluding nans
@@ -330,8 +383,6 @@ plotit(nav_lon,nav_lat,var,'log10(water column analaysis depth)',1)
 var = np.mean(rho_top,axis=0)
 var[var==0]=np.nan
 clim = [np.nanpercentile(var, 5), np.nanpercentile(var, 95)]
-#print 'colorbar limits:', clim
-#var = ma.masked_where(var <= 1024, var)
 plotit(nav_lon,nav_lat,var,'surface density',2)
 plt.clim(clim)
 
@@ -339,18 +390,14 @@ plt.clim(clim)
 ###############################
 var = np.mean(rho_bot,axis=0)
 var[var==0]=np.nan
-#var = ma.masked_where(var <= 1020, var)
 plotit(nav_lon,nav_lat,var,'density at deepest analysis depth',3)
 plt.clim(clim)
 
 ## mean density, rho_bar
 ###############################
-#var2=( rho_bot - rho_bar) / (rho_top - rho_bot)*np.mean(H,axis=0)
-#var = var2[0,:,:]
 var=np.mean(rho_bar,axis=0)
 var[var==0]=np.nan
 clim = [np.nanpercentile(var, 5), np.nanpercentile(var, 95)]
-#var = ma.masked_where(var <= 1024, var)
 plotit(nav_lon,nav_lat,var,'ave density over analysis depth',4)
 plt.clim(clim)
 
@@ -365,49 +412,45 @@ plt.suptitle(filename)
 
 ## Analysis depth range
 ###############################
-var = np.mean(H,axis=0)*mask_land*mask_200m
+var = np.mean(H,axis=0)*mask
 clim = [np.nanpercentile(var, 5), np.nanpercentile(var, 95)]
 #print 'subplot 1: percentile range:',clim
 plotit_sub(nav_lon,nav_lat,var,'Analysis depth range (m)',clim,'221')
-#plt.clim(clim)
-#plt.contour(nav_lon,nav_lat,depth[0,:,:]*mask_shelf, [100,200])
 
 ## pycnocline depth
 ###############################
 #var = pycn_depth_map
-var = delta[0,:,:]*mask_land*mask_200m # *mask_strat
+var = delta[0,:,:]*mask
 var[var>=200]=np.nan
 clim = [10, 50]
-#clim = [np.nanpercentile(var, 5), np.nanpercentile(var, 95)]
-#print 'subplot 2: percentile range:',clim
-plotit_sub(nav_lon,nav_lat,var+mask_strat,'pycnocline depth (m)',clim,'222')
-#plt.clim(clim)
-#plt.contour(nav_lon,nav_lat,H[0,:,:]*mask_shelf, [100,200])
+plotit_sub(nav_lon,nav_lat,var+mean_mask_strat,'pycnocline depth (m)',clim,'222')
 
 
 ## average bulk stratification
 ###############################
-var = np.mean( -strat ,axis=0)*mask_land*mask_200m #*(mask_strat*mask_strat)
-#var = np.max(nlev,axis=0) - np.min(nlev,axis=0)
-clim = [0, 0.02]
-#clim = [0, np.nanpercentile(var, 95)]
-#print 'subplot 4: percentile range:',clim
-plotit_sub(nav_lon,nav_lat,var+mask_strat,'-mean bulk stratification (kg/m^4)',clim,'223')
-#plt.clim(clim)
+var = np.mean( -strat ,axis=0)*mask
+clim = [2E-3, 0.02]
+plotit_sub(nav_lon,nav_lat,var+mean_mask_strat,'-mean bulk stratification (kg/m^4)',clim,'223')
 
-
-## pycnocline depth variance
+## pycnocline depth tidal std
 ###############################
-var = np.log10(internal_tide_map*mask_land*mask_200m) #*mask_strat)
-clim = [0., 2.6]
-#clim = [np.nanpercentile(var, 1), np.nanpercentile(var, 99)]
-#print 'subplot 3: percentile range:',clim
-plotit_sub(nav_lon,nav_lat,var+mask_strat,'log10[pycnocline depth variance (m^2)]',clim,'224')
-#plt.clim(clim)
+#var = np.log10(internal_tide_map*mask_land*mask_200m) 
+var = np.sqrt(internal_tide_map)*mask
+clim = [0., 10.]
+#plotit_sub(nav_lon,nav_lat,var+mean_mask_strat,'log10[pycnocline depth variance (m^2)]',clim,'224')
+plotit_sub(nav_lon,nav_lat,var+mean_mask_strat,'pycnocline depth tidal std (m)]',clim,'224')
 
-
-
-
+if(0): # Perahps plot std with a log colourscale     
+    ax3 = fig.add_subplot(2,2,4)
+    cs = ax3.pcolormesh(nav_lon,nav_lat,var+mean_mask_strat, cmap=plt.cm.gnuplot,
+                        norm=colors.LogNorm(vmin=0.1, vmax=10))
+    cs.cmap.set_under('grey')
+    cb = plt.colorbar(cs, extend="both") # Extend the upper end of the colorbar    
+    ax3.set_title('pycnocline depth tidal std (m)]')
+    ax3.set_ylabel('lat')
+    ax3.set_xlabel('lon')
+    ax3.set_ylim([+45,+63])
+    ax3.set_xlim([-14,+14])
 
 ##############################################################################
 # Plot pycnocline statistics in 3 day chunks
@@ -444,7 +487,7 @@ for i in range(6,7):
     var = copy.deepcopy(pycn_depth_map_3day[i,:,:])
     clim = [0, 50]
     #clim = copy.deepcopy([0, np.nanpercentile(var*mask, 95)])
-    var[mask*mask_strat==-999] = -999 # These will be off the bottom of the colorbar scale, assign grey 
+    var[mask*mask_strat[i,:,:]==-9999] = -9999 # These will be off the bottom of the colorbar scale, assign grey 
     plotit_sub(nav_lon,nav_lat,var*mask,'pycnocline depth (m)',clim,'323')
 
     ## pycnocline depth histogram
@@ -461,13 +504,17 @@ for i in range(6,7):
     ## pycnocline depth variance
     ###############################    
     var = copy.deepcopy(internal_tide_map_3day[i,:,:])
-    #clim = [0, 30]
-    clim = [np.log10(1), np.log10(30)]
+    clim = [0.1, 10]
+    #clim = [np.log10(1), np.log10(30)]
     #clim = copy.deepcopy([0, np.nanpercentile(var*mask, 95)])
-    var[mask*mask_strat==-999] = -999 # These will be off the bottom of the colorbar scale, assign grey 
-    #plotit_sub(nav_lon,nav_lat,var*mask,'pycnocline depth variance(m)',clim,'322')
-    plotit_sub(nav_lon,nav_lat,np.log10(var)*mask,'log10[pycnocline depth variance(m)]',clim,'324')
-        
+    var[mask*mask_strat[i,:,:]==-9999] = -9999 # These will be off the bottom of the colorbar scale, assign grey 
+    #plotit_sub_log(nav_lon,nav_lat,np.log10(var)*mask,'log10[pycnocline depth variance(m)]',clim,'324')
+
+    var = np.sqrt(internal_tide_map_3day[i,:,:])*mask
+    clim = [0., 10.]
+    plotit_sub(nav_lon,nav_lat,var+mask_strat[i,:,:],'pycnocline depth tidal std (m)]',clim,'324')
+
+
     ## pycnocline depth variance histogram
     ###############################
     plt.subplot(3,2,6)
@@ -487,6 +534,7 @@ for i in range(6,7):
     plt.savefig(fname)
     
     
+    
 ##############################################################################    
 # Plot std histogram vs time
 ##############################################################################
@@ -501,28 +549,29 @@ std = sqrt(10^sortvar) OR 10^(sortvar/2)
 
 std = np.power(10,sortvar/2)
 
-fig = plt.figure(figsize=(12,6))
+fig = plt.figure(figsize=(12,12))
 
 ## SSH
 ###############################
 var = depth_ST4
 hlim = [-0.25, 0.25]
-ax1 = fig.add_subplot(211)
+ax1 = fig.add_subplot(411)
 ax1.plot(time_datetime_ST4, depth_ST4[:,-1,1,1])
 dstart = datetime.datetime(2012,6,1)
 dend = datetime.datetime(2012,8,9)
 ax1.set_xlim(dstart, dend)
 #plt.xlabel('time')
 ax1.set_ylabel('SSH above mean (m)')
-ax1.set_title('ST4 SSH')
 # text label
 start = ax1.get_xlim()[0] + 0.5
 ax1.text(start, -0.025, 'a) SSH at ST4')
 
 
 
-ax2 = fig.add_subplot(212)
-msh = ax2.pcolormesh(time_datetime_3day,np.arange(100),std.T, norm=colors.LogNorm(vmin=1, vmax=10))
+ax2 = fig.add_subplot(412)
+msh = ax2.pcolormesh(time_datetime_3day,np.arange(100), std.T, 
+                     cmap=plt.cm.gnuplot,
+                     norm=colors.LogNorm(vmin=1, vmax=10))
 ax2.set_ylabel('domain coverage %')
 ax2.set_xlabel('time')
 ax2.set_xlim(dstart,dend)
@@ -532,7 +581,7 @@ ax2.set_xlim(dstart,dend)
 #cbaxes = fig.add_axes([0.13, -0.02, 0.77, 0.03]) # [left, bottom, width, height]
 #cb = fig.colorbar(msh, cax = cbaxes, orientation='horizontal') 
 cbaxes = fig.add_axes([0.91, 0.125, 0.03, 0.775]) # [left, bottom, width, height]
-cb = fig.colorbar(msh, cax = cbaxes, orientation='vertical') 
+cb = fig.colorbar(msh, cax = cbaxes, orientation='vertical', extend="both") 
 # Fiddle with the colorbar ticks
 cb.set_ticks(range(1,11))
 cb.set_ticklabels(range(1,11))
@@ -544,7 +593,47 @@ start = ax2.get_xlim()[0] + 1.5
 ax2.text(start, 7, 'b) std($\delta$) (m)',color='w')
 
 
-## Save output
+
+# Add spring and neap snapshot std maps
+#######################################
+
+for i in [0,1]:
+    count = [10, 150]
+#    count = [780, 980]
+    label = ['c)','d)'] # std($\delta$)'+time_datetime_3day[count[i]], ]
+    # Find indices in SSH ST4 data that correspond to the IT data
+    ind = [ii for ii in range(len(time_counter_ST4)) if time_counter_ST4[ii] in time_counter_3day[count[i],:]]
+    ax1.plot([time_datetime_ST4[ii] for ii in ind], depth_ST4[ind,-1,1,1], 'r')
+
+
+    ## pycnocline depth variance
+    ############################### 
+    var = copy.deepcopy(internal_tide_map_3day[count[i],:,:])
+    var[mask*mask_strat[i,:,:]==-999] = -999 # These will be off the bottom of the colorbar scale, assign grey 
+    std = np.power(10,var/2)
+
+    
+    ax3 = fig.add_subplot(2,2,3+i)
+
+    cs = ax3.pcolormesh(nav_lon,nav_lat,std*mask, cmap=plt.cm.gnuplot,
+                        norm=colors.LogNorm(vmin=1., vmax=10))
+    cs.cmap.set_under('grey')
+    #cb = plt.colorbar(cs, extend="both") # Extend the upper end of the colorbar    
+
+    ax3.set_ylabel('lat')
+    ax3.set_xlabel('lon')
+    ax3.set_ylim([+45,+63])
+    ax3.set_xlim([-14,+14])
+    #ax3.set_title('std($\delta$) (m)')
+    #ax3.set_clim = [np.log10(1), np.log10(10)]
+    ax3.text(-13, 46, label[i]+' std($\delta$)') #+time_datetime_3day[count[i]])
+
+    ax3.text(-13, 55, 'IN PROGRESS', fontsize='36') #+time_datetime_3day[count[i]])
+
+
+    
+
+# Save output
 ###############################
 fname = dirroot+'/scratch/jelt/tmp/internaltidemap_std.png'
 plt.savefig(fname)
