@@ -45,6 +45,13 @@ Fixed `internaltidemap_AMM60_paper.ipynb` and `pycnocline_mod_obs_virtual_moorin
 * Plotting std(delta) vs time. Created py file
 
 ---
+**29 Nov**
+
+* Testing fresh clone of repo
+
+---
+
+
 **To-do**
 
 `internaltidemap_AMM60_paper.ipynb`:

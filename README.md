@@ -48,6 +48,7 @@ Fixed `internaltidemap_AMM60_paper.ipynb` and `pycnocline_mod_obs_virtual_moorin
 **29 Nov**
 
 * Testing fresh clone of repo
+* Running mean strat. Update py file
 
 ---
 
